@@ -6,13 +6,13 @@ An open, lightweight **Streamlit application for interactive learning and explor
 
 ## Included now
 
-- **Flexural analysis:** singly and doubly reinforced rectangular beams; positive-moment flanged T-beams, with both Whitney-block cases; general strain-compatible steel stress calculation and φ classification.
-- **Interactive cross sections and what-if plots:** experiment with steel area, neutral axis, strength factor, strength and extreme tension strain.
-- **Design with known b and h:** automated selection of nominal tension bars (#4 through #11, 2–12 bars) for one-layer rectangular beams. It checks nominal flexural strength, tension control, minimum beam steel, horizontal bar spacing, and effective depth based on chosen bars.
+- **Flexural analysis:** singly and doubly reinforced rectangular beams; positive-moment flanged T-beams, with both Whitney-block cases; general strain-compatible steel stress calculation and φ classification. Rectangular sections support either positive or negative moment (top or bottom tension steel).
+- **Interactive cross sections and what-if plots:** experiment with steel area, neutral axis, strength factor, strength and extreme tension strain. Section diagrams show actual mixed-size bar positions, reinforcement centroid and compression block for discrete layouts.
+- **Design with known b and h:** manually configure one or two tension layers, with two bar-size groups (size and count) in each layer. Recalculate area-weighted reinforcement centroid, effective depth, individual layer steel strains, extreme-layer tension strain, and flexural strength for both moment signs. Automatic one-layer uniform-size suggestions remain available (#4 through #11, 2–12 bars).
 - **Preliminary beam dimensions unknown:** initial strain method (default εt=0.0075) and b/d heuristic, followed by detailed rebar selection/verification for a one-layer section.
-- **Doubly reinforced design:** selection is available with **fixed upper reinforcement** and searches for tension bars. This is not a complete unconstrained doubly reinforced section design algorithm.
+- **Doubly reinforced design:** optional fixed **compression-face** reinforcement (top for positive moment, bottom for negative), with up to two bar-size groups in one compression layer. This is not a complete unconstrained doubly reinforced section design algorithm.
 - Self-contained prediction prompts and explanation of intermediate calculations. No scores are collected.
-- Icon-labeled sidebar page links, a public overview page, and clearly grouped input, result, and visualization cards.
+- Icon-labeled sidebar page links, a public overview page, and clearly grouped input, result, and visualization cards. Public footer credits Dr. Wu at UT Chattanooga.
 
 ## Run locally
 
@@ -44,14 +44,14 @@ Community Cloud offers free hosting for small apps, subject to resource limits, 
 
 ## Selected engineering assumptions and boundaries
 
-- US customary: **in, ksi, kips, kip-ft**; normalweight nonprestressed concrete, positive bending, symmetric top/bottom reinforcement centroid in 1 layer, εcu=0.003, steel stress ±fy, Es default 29,000 ksi. Strength is computed by **bisection of force equilibrium**.
+- US customary: **in, ksi, kips, kip-ft**; normalweight nonprestressed concrete, rectangular positive and negative bending, one or two tension layers, εcu=0.003, steel stress ±fy, Es default 29,000 ksi. Strength is computed by **bisection of force equilibrium** using each individual bar layer depth. The software uses the area-weighted tension centroid for d and the most distant tension layer for εt and φ.
 - β₁ per ACI 318-19 Table 22.2.2.4.3.
 - φ per ACI Table 21.2.2, tension-controlled when εt ≥ εty + 0.003 (also the nonprestressed beam design condition in §9.3.3.1). Transitional/compression-control results are shown for pedagogical analysis, **not as acceptable beam designs**.
 - As,min per §9.6.1.2; the §9.6.1.3 possible exception is **not** evaluated.
-- One-layer horizontal clear spacing checked by a simplified interpretation of §25.2.1, using bar diameter, 1 in, and 4/3 nominal maximum aggregate size. Aggregate input matters.
+- Horizontal clear spacing for each layer uses §25.2.1: at least the greatest of 1 in, nominal diameter, or 4/3 nominal maximum aggregate size. Two-layer bars are vertically aligned over lower-layer bars where practical, with code minimum vertical clearance 1 in (§25.2.2); this app additionally requires clear vertical spacing at least the **largest nominal bar diameter** as a conservative instructional rule. Cover is entered to the outer stirrup; each layer uses a common centerline based on the largest bar diameter in that layer. Invalid spacing / alignment is flagged and disqualifies the limited design check.
 - For T-beams, the user provides a previously verified effective bf; §6.3.2.1 is **not implemented**. Positive moment and flange in compression only.
-- Simplified treatment of compression steel accounts for net compression within the Whitney block. If top bars enter tension, the analysis flags it; the designer must reconsider modeling.
-- Not checked: load combinations/analysis and live-load patterns, anchorage/development, stirrups and shear, deflection and serviceability, service-load crack-control steel spacing, exposure/cover compliance, seismic provisions, full 3D geometry, bar curtailment, multilayer placements, beam stability, detailing of fixed upper bars, or code edition updates.
+- Simplified treatment of compression steel accounts for net compression within the Whitney block. If the compression-side bars enter tension, the analysis flags it; the designer must reconsider modeling.
+- Not checked: load combinations/analysis and live-load patterns, anchorage/development, stirrups and shear, deflection and serviceability, service-load crack-control steel spacing, exposure/cover compliance, seismic provisions, full 3D geometry, bar curtailment, beam stability, full column/bar-cage detailing, or code edition updates.
 - Notation and simplified instructional assumptions may differ from practice-specific requirements. Always consult the official code.
 
 ## File structure
@@ -59,6 +59,7 @@ Community Cloud offers free hosting for small apps, subject to resource limits, 
 ```
 app.py                     Public Streamlit user interface and multipage navigation
 concrete/aci318.py         Material factors, nominal bars and selected code limits
+concrete/layout.py         Mixed-bar arrangement, weighted centroids, layer spacing and bar positions
 concrete/flexure.py        Pure-Python strain-compatible flexural analysis
 concrete/design.py         Trial sizing + one-layer rebar selections
 concrete/visuals.py        Original, interactive Plotly drawings
@@ -69,7 +70,7 @@ requirements.txt
 
 ## Expansion roadmap
 
-- Complete doubly reinforced beam design including optimized upper bars and multilayer detailing.
+- Complete doubly reinforced beam design including optimized compression steel and full multidirectional detailing.
 - T-beam design, one-way slabs, effective flange width, serviceability and reinforcement detailing.
 - Shear design (next module), then column P–M interaction.
 - Optional **AI Socratic tutor** (separate configuration; must not be the design calculation authority).
@@ -79,4 +80,4 @@ requirements.txt
 - James K. Wight, *Reinforced Concrete: Mechanics and Design*, 8th edition, Pearson.
 - ACI, *Building Code Requirements for Structural Concrete (ACI 318-19)*. Consult a properly licensed copy of the code for complete requirements.
 
-The application provides original instructional diagrams and simplified workflows; no copyrighted textbook or code pages are redistributed. It does not implement every topic, example, or requirement from either reference.
+Developed by Dr. Wu @ UT Chattanooga. The application provides original instructional diagrams and simplified workflows; no copyrighted textbook or code pages are redistributed. It does not implement every topic, example, or requirement from either reference.
