@@ -18,6 +18,8 @@ class Section:
     hf: float = 0.0
     as_c: float = 0.0
     dp: float = 2.375
+    bending: str = "Positive"  # Positive -> bottom tension; Negative -> top tension.
+    tension_bars: tuple[tuple[float, float], ...] = ()  # (area, depth from compression face)
 
     def __post_init__(self):
         if self.b <= 0 or self.h <= 0 or self.as_t <= 0:
@@ -28,8 +30,19 @@ class Section:
             raise ValueError("Compression steel area must be nonnegative; d' > 0.")
         if self.as_c and not (self.dp < self.d):
             raise ValueError("Compression reinforcement must be above tension steel (d' < d).")
+        if self.bending not in ("Positive", "Negative"):
+            raise ValueError("Bending must be Positive or Negative.")
+        if self.tension_bars:
+            if any(area <= 0 or not (0 < depth < self.h) for area, depth in self.tension_bars):
+                raise ValueError("Bar areas and depths must be positive and within the section.")
+            total = sum(area for area, _ in self.tension_bars)
+            centroid = sum(area*depth for area, depth in self.tension_bars)/total
+            if abs(total-self.as_t)>1e-6 or abs(centroid-self.d)>1e-6:
+                raise ValueError("As and d must match the individual bar areas and their centroid.")
         if self.kind not in ("Rectangular", "T-beam (+M)"):
             raise ValueError("Section type not supported.")
+        if self.kind == "T-beam (+M)" and self.bending != "Positive":
+            raise ValueError("T-beam compression flange model is valid only for positive bending; use a rectangular web section for negative bending.")
         if self.kind == "T-beam (+M)" and not (self.b <= self.bf and 0 < self.hf < self.h):
             raise ValueError("T-beam needs bf >= bw and 0 < hf < h.")
 
@@ -81,29 +94,40 @@ def _stress_block(s: Section, m: Materials, a: float):
 def _quantities(c: float, s: Section, m: Materials):
     a = m.beta1 * c
     cc, cc_first_moment = _stress_block(s, m, a)
-    et = 0.003 * (s.d - c) / c
+    # All depths measured from the physical compression face.
+    bars = s.tension_bars or ((s.as_t, s.d),)
+    outer_depth = max(depth for _, depth in bars)
+    et = 0.003 * (outer_depth - c) / c
     fst = max(-m.fy, min(m.fy, m.es * et))
     eps_cp = 0.003 * (c - s.dp) / c if s.as_c else 0.0
     fcp = max(-m.fy, min(m.fy, m.es * eps_cp)) if s.as_c else 0.0
-    # Avoid counting concrete and reinforcing steel over the same area
-    # when the upper reinforcement is located inside equivalent stress block.
+    # Concrete displaced by each steel bar in the Whitney block must be
+    # removed; each reinforcing layer is solved at its own actual strain.
     cs_net = s.as_c * (fcp - (0.85 * m.fc if s.dp <= a else 0.0))
-    t = s.as_t * fst
-    return a, cc, cc_first_moment, et, fst, eps_cp, fcp, cs_net, t
+    t = 0.0
+    steel_first_moment = 0.0
+    for area, depth in bars:
+        eps = 0.003 * (depth - c) / c
+        fs = max(-m.fy, min(m.fy, m.es * eps))  # +tension, -compression
+        net_tension = area * (fs + (0.85*m.fc if depth <= a else 0.0))
+        t += net_tension
+        steel_first_moment += net_tension * depth
+    return a, cc, cc_first_moment, et, fst, eps_cp, fcp, cs_net, t, steel_first_moment
 
 
 def analyze(s: Section, m: Materials) -> FlexureResult:
-    # Bisection in (0,d), because positive bending presumes the specified
-    # bottom reinforcement is in the tension zone at ultimate.
-    low, high = s.d * 1e-8, s.d * (1 - 1e-10)
+    # Bisection from the compression face to the outermost tension bar.
+    # The layer-by-layer strains can differ for two reinforcement rows.
+    outer_depth = max((depth for _, depth in s.tension_bars), default=s.d)
+    low, high = outer_depth * 1e-8, outer_depth * (1 - 1e-10)
 
     def balance(c):
-        _, cc, _, _, _, _, _, cs_net, t = _quantities(c, s, m)
+        _, cc, _, _, _, _, _, cs_net, t, _ = _quantities(c, s, m)
         return cc + cs_net - t
 
     fl, fh = balance(low), balance(high)
     if not (fl < 0 < fh):
-        raise ValueError("Cannot bracket a positive-bending equilibrium state with tension steel in tension.")
+        raise ValueError("Cannot bracket flexural equilibrium for this reinforcement layout.")
     for _ in range(110):
         mid = (low + high) / 2.0
         if balance(mid) > 0:
@@ -111,10 +135,9 @@ def analyze(s: Section, m: Materials) -> FlexureResult:
         else:
             low = mid
     c = (low + high) / 2.0
-    a, cc, cc_first, et, fst, eps_cp, fcp, cs_net, t = _quantities(c, s, m)
-    # Internal couple about tension steel centroid; concrete first moment
-    # is already relative to top face, and net compression steel at d'.
-    mn = cc * s.d - cc_first + cs_net * (s.d - s.dp)
+    a, cc, cc_first, et, fst, eps_cp, fcp, cs_net, t, steel_first = _quantities(c, s, m)
+    # First moments of signed forces about the compression face.
+    mn = steel_first - cc_first - cs_net * s.dp
     phi, control = strength_reduction_factor(et, m)
     if s.kind == "Rectangular":
         case = "Rectangular Whitney compression block"
