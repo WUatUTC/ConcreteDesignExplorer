@@ -17,6 +17,7 @@ from concrete.aci318 import (
 from concrete.design import candidates_for_section, preliminary_size
 from concrete.flexure import Section, analyze
 from concrete.visuals import interaction_charts, section_figure
+from concrete.layout import BarGroup, BarLayout, build_layout, bar_depths_from_compression
 
 st.set_page_config(
     page_title="Concrete Design Explorer",
@@ -41,7 +42,7 @@ def page_header(title: str, description: str) -> None:
     st.caption(description)
 
 
-def section_metrics(s: Section, r, mu=None) -> None:
+def section_metrics(s: Section, r, mu=None, layout_valid=True) -> None:
     """Present the limited flexural results and their important qualifications."""
     a, b, c, d = st.columns(4)
     a.metric("Nominal strength, Mn", f"{r.mn_kft:,.1f} kip-ft")
@@ -66,10 +67,10 @@ def section_metrics(s: Section, r, mu=None) -> None:
             "exception is not assessed)."
         )
     if r.strain_c_steel < 0 and s.as_c:
-        st.warning("Upper steel is in tension at nominal strength in this model; it is not acting as compression reinforcement.")
+        st.warning("Compression-face steel is in tension at nominal strength; it is not acting as compression reinforcement.")
 
     if mu is not None:
-        if r.phi_mn_kft >= mu and r.control == "Tension-controlled" and s.as_t >= r.as_min:
+        if r.phi_mn_kft >= mu and r.control == "Tension-controlled" and s.as_t >= r.as_min and layout_valid:
             st.info(
                 f"**Limited flexural check satisfied:** φMn = {r.phi_mn_kft:.1f} ≥ "
                 f"Mu = {mu:.1f} kip-ft. Other design checks remain outstanding."
@@ -77,7 +78,7 @@ def section_metrics(s: Section, r, mu=None) -> None:
         else:
             st.error(
                 "**Limited flexural check not satisfied:** review strength, "
-                "minimum reinforcement, or tension-control requirement."
+                "minimum reinforcement, tension-control, or reinforcement spacing requirements."
             )
 
 
@@ -98,8 +99,8 @@ def detail_panel(r) -> None:
             "Concrete compression Cc (kip)": r.cc,
             "Net upper-steel compression C's (kip)": r.cs_net,
             "Tension steel force T (kip)": r.tension,
-            "Tension steel stress fs (ksi)": r.stress_t,
-            "Upper steel stress f's (ksi)": r.stress_c_steel,
+            "Extreme tension steel stress fs (ksi)": r.stress_t,
+            "Compression-side steel stress f's (ksi)": r.stress_c_steel,
             "As,min (in²)": r.as_min,
             "Equilibrium residual (kip)": r.equilibrium_error,
         }
@@ -116,17 +117,109 @@ def detail_panel(r) -> None:
         )
 
 
-def show_diagrams(s: Section, r) -> None:
+def show_diagrams(s: Section, r, layout=None) -> None:
     left, right = st.columns([1, 1.12], gap="large")
     with left:
         st.markdown("#### Section and stress block")
-        st.plotly_chart(section_figure(s, r), use_container_width=True)
-        st.caption("Schematic reinforcement; one-layer bar-fit checks are available in the design section.")
+        st.plotly_chart(section_figure(s, r, layout=layout), use_container_width=True)
+        st.caption("Dark circles: tension steel. Blue shading: compression block. Dashed line: neutral axis. Reinforcement layout is schematic; verify all constructability and detailing requirements.")
     with right:
         st.markdown("#### Reinforcement sensitivity")
         f1, f2 = interaction_charts(s, m, r)
         st.plotly_chart(f1, use_container_width=True)
         st.plotly_chart(f2, use_container_width=True)
+        if layout is not None:
+            st.caption("Sensitivity curves hold the bar depths fixed and scale steel areas continuously for teaching; intermediate points are not discrete constructible bar arrangements.")
+
+
+
+
+def bending_selector(key: str) -> str:
+    return st.radio("Bending direction", ["Positive", "Negative"], horizontal=True,
+                    key=key, help="Positive (+M): bottom steel in tension. Negative (−M): TOP steel in tension; compression is at the bottom.")
+
+
+def reinforcement_editor(prefix: str, b: float, h: float, cover: float,
+                         stirrup_db: float, aggregate: float,
+                         bending: str) -> BarLayout:
+    """Two bar-size groups per row, one or two physically detailed layers."""
+    st.markdown(f"**Tension reinforcement — {'bottom' if bending == 'Positive' else 'TOP'} face**")
+    two = st.toggle("Use two layers", value=False, key=f"{prefix}_two")
+    groups = []
+    for layer in range(1, 3 if two else 2):
+        st.caption(f"Layer {layer} · {'nearest tension face' if layer == 1 else 'toward compression face'}")
+        a,b1,c,d = st.columns([1,1,1,1])
+        with a:
+            count1 = st.number_input("Bar count A", 1, 10, 3 if layer == 1 else 2,
+                                     key=f"{prefix}_L{layer}_n1")
+        with b1:
+            size1 = st.selectbox("Bar size A", list(REBAR)[1:], index=4 if layer == 1 else 3,
+                                 key=f"{prefix}_L{layer}_s1")
+        with c:
+            count2 = st.number_input("Bar count B (optional)", 0, 10, 0,
+                                     key=f"{prefix}_L{layer}_n2")
+        with d:
+            size2 = st.selectbox("Bar size B", list(REBAR)[1:], index=3,
+                                 key=f"{prefix}_L{layer}_s2")
+        groups.append([BarGroup(size1,int(count1))]+([BarGroup(size2,int(count2))] if count2 else []))
+    user_gap = None
+    if two:
+        maximum = max(REBAR[g.designation][0] for row in groups for g in row)
+        required = max(1.0, maximum)
+        col1,col2=st.columns([1,2])
+        with col1:
+            user_gap = st.number_input("Clear distance between layers (in)",0.0,10.0,
+                                       float(round(required,3)),step=0.125,key=f"{prefix}_gap")
+        with col2:
+            st.caption(f"Minimum used in this tool: max(1 in, largest bar diameter) = {required:.3f} in. ACI 318-19 §25.2.2 specifies at least 1 in and vertical alignment; the diameter-based minimum here is deliberately more conservative.")
+    return build_layout(b,h,cover,stirrup_db,groups,bending,aggregate,user_gap)
+
+
+def layout_summary(layout: BarLayout) -> None:
+    c1,c2,c3,c4=st.columns(4)
+    c1.metric("Total As",f"{layout.as_t:.3f} in²")
+    c2.metric("Steel centroid from top",f"{layout.centroid_y:.3f} in")
+    c3.metric("Effective depth d",f"{layout.d:.3f} in")
+    c4.metric("Extreme steel depth",f"{layout.d_extreme:.3f} in")
+    if len(layout.layers)==2:
+        st.caption(f"Actual clear spacing between reinforcement layers: {layout.vertical_clear:.3f} in; specified minimum: {layout.required_vertical_clear:.3f} in.")
+    st.dataframe(pd.DataFrame([{"Row":x.number,"Bars":x.count,"Center from top (in)":round(x.y,3),
+                              "As (in²)":round(x.total_area,3),"Horizontal clear (in)":round(x.clear_horizontal,3),
+                              "Minimum (in)":round(x.minimum_horizontal,3)} for x in layout.layers]),
+                 hide_index=True,use_container_width=True)
+    if layout.issues:
+        for issue in layout.issues:
+            st.error("Detailing alert: "+issue)
+        st.warning("Strength may be calculated for exploration, but a nonconforming layout cannot be accepted as a beam design.")
+    else:
+        st.success("Selected horizontal and vertical bar-spacing/fit checks satisfied (other ACI detailing checks still required).")
+
+
+def compression_steel_editor(prefix: str, b: float, cover: float, stirrup_db: float,
+                             aggregate: float, bending: str):
+    st.markdown(f"**Additional reinforcement on the compression side ({'top' if bending == 'Positive' else 'bottom'})**")
+    a,b1,c,d=st.columns(4)
+    with a: n1=st.number_input("Compression bars A",2,8,2,key=f"{prefix}_cn1")
+    with b1: size1=st.selectbox("Compression size A",list(REBAR)[1:],index=3,key=f"{prefix}_cs1")
+    with c: n2=st.number_input("Compression bars B",0,8,0,key=f"{prefix}_cn2")
+    with d: size2=st.selectbox("Compression size B",list(REBAR)[1:],index=2,key=f"{prefix}_cs2")
+    sizes=[size1]*n1 + ([size2]*n2 if n2 else [])
+    area=sum(REBAR[size][1] for size in sizes)
+    dp=cover+stirrup_db+max(REBAR[size][0] for size in sizes)/2
+    inside=b-2*(cover+stirrup_db)
+    clear=(inside-sum(REBAR[size][0] for size in sizes))/(len(sizes)-1)
+    req=max(required_horizontal_clear_spacing(REBAR[size][0],aggregate) for size in sizes)
+    valid=clear+1e-9>=req
+    st.caption(f"Compression-side As′ = {area:.3f} in²; d′ = {dp:.3f} in from compression face; clear spacing = {clear:.3f} in (required ≥ {req:.3f} in).")
+    if not valid: st.error("Compression-side reinforcement does not satisfy the horizontal spacing check.")
+    return area,dp,valid
+
+
+def section_from_layout(b: float,h: float,layout: BarLayout,kind: str="Rectangular",
+                        bf: float=0.0,hf: float=0.0,as_c: float=0.0,dp: float=2.375):
+    return Section(b=b,h=h,d=layout.d,as_t=layout.as_t,kind=kind,bf=bf,hf=hf,
+                   as_c=as_c,dp=dp,bending=layout.bending,
+                   tension_bars=bar_depths_from_compression(layout,h))
 
 
 def home() -> None:
@@ -145,12 +238,12 @@ def home() -> None:
     with first[0]:
         with st.container(border=True):
             st.markdown("#### 📊 Flexural analysis")
-            st.write("Analyze rectangular, doubly reinforced, and positive-moment T-beam sections.")
+            st.write("Analyze rectangular beams under positive or negative bending and T-beams under positive bending.")
             st.page_link(PAGES["analysis"], label="Open analysis", icon=":material/arrow_forward:")
     with first[1]:
         with st.container(border=True):
             st.markdown("#### 📐 Beam design")
-            st.write("Select a one-layer reinforcement layout for known section dimensions and moment demand.")
+            st.write("Compare mixed-size bars and one- or two-layer arrangements for known dimensions and moment demand.")
             st.page_link(PAGES["design"], label="Design reinforcement", icon=":material/arrow_forward:")
     with first[2]:
         with st.container(border=True):
@@ -185,185 +278,127 @@ def home() -> None:
 
 
 def flexural_analysis() -> None:
-    page_header(
-        "Flexural analysis",
-        "Analyze an existing reinforced-concrete section and explore strength, strain, and ductility.",
-    )
+    page_header("Flexural analysis", "Analyze an existing beam section with mixed bar sizes, one or two layers, and either bending direction.")
     with st.container(border=True):
-        st.markdown("### 1 · Define the section")
-        section_kind = st.radio(
-            "Compression section geometry", ["Rectangular", "T-beam (+M)"], horizontal=True
-        )
-        doubly = st.checkbox("Include upper reinforcement (doubly reinforced analysis)", value=False)
-        z1, z2, z3 = st.columns(3, gap="large")
-        with z1:
-            b = st.number_input("Beam width b / web width bw (in)", 6.0, 60.0, 12.0, step=1.0)
-            h = st.number_input("Overall height h (in)", 10.0, 72.0, 24.0, step=1.0)
-        with z2:
-            cover = st.number_input("Clear cover to outside stirrup (in)", .75, 4.0, 1.5, step=.25)
-            stirrup_db = st.selectbox("Stirrup bar size", ["#3", "#4"])
-        with z3:
-            as_mode = st.radio("Tension steel input", ["Bar selection", "Enter As"], horizontal=True)
-            if as_mode == "Bar selection":
-                n = st.slider("Tension bars (one layer)", 2, 10, 3)
-                bar_size = st.selectbox("Tension bar size", list(REBAR)[1:], index=4)
-                as_t = n * REBAR[bar_size][1]
-                d = effective_depth(h, cover, REBAR[stirrup_db][0], REBAR[bar_size][0])
-                st.caption(f"As = {as_t:.3f} in² · d = {d:.3f} in")
-            else:
-                as_t = st.number_input("Tension steel area As (in²)", .1, 45.0, 3.0, step=.1)
-                d = st.number_input(
-                    "Effective depth d (in)", 1.0, h - .1, min(21.5, h - .2), step=.25
-                )
-
-        bf = hf = 0.0
-        if section_kind == "T-beam (+M)":
-            st.markdown("**Compression flange (positive bending only)**")
-            t1, t2 = st.columns(2)
-            with t1:
-                bf = st.number_input("Effective flange width bf (in)", b, 180.0, max(36.0, b), step=2.0)
-            with t2:
-                hf = st.number_input("Flange thickness hf (in)", 2.0, max(2.1, h - .5), min(5.0, h - 1), step=.5)
-            st.caption("Enter an effective flange width already verified using ACI §6.3.2. This application does not calculate bf or analyze negative-moment T-beams.")
-
-        as_c = 0.0
-        dp = 2.375
+        st.markdown("### 1 · Define the section and bending direction")
+        bending=bending_selector("analysis_bending")
+        kind=st.radio("Section geometry",["Rectangular","T-beam (+M)"] if bending=="Positive" else ["Rectangular"], horizontal=True,key="analysis_kind")
+        c1,c2,c3=st.columns(3)
+        with c1:
+            b=st.number_input("Beam width b / web width bw (in)",6.0,60.0,12.0,step=1.0,key="analysis_b")
+            h=st.number_input("Overall beam height h (in)",10.0,72.0,24.0,step=1.0,key="analysis_h")
+        with c2:
+            cover=st.number_input("Clear cover to outer stirrup (in)",.75,4.0,1.5,step=.25,key="analysis_cover")
+            stirrup=st.selectbox("Stirrup bar size",["#3","#4"],key="analysis_stirrup")
+        with c3:
+            agg=st.number_input("Max coarse aggregate size (in)",.375,1.5,.75,step=.125,key="analysis_agg")
+            as_mode=st.radio("Tension steel representation",["Select rebars (1–2 layers)","Enter As and d"],key="analysis_mode")
+        bf=hf=0.0
+        if kind=="T-beam (+M)":
+            t1,t2=st.columns(2)
+            with t1: bf=st.number_input("Effective flange width bf (in)",b,180.0,max(36.0,b),step=2.0,key="analysis_bf")
+            with t2: hf=st.number_input("Flange thickness hf (in)",2.0,max(2.1,h-.5),min(5.0,h-1),step=.5,key="analysis_hf")
+            st.caption("The compression flange is modeled for positive bending only; enter bf after verifying ACI §6.3.2.")
+        layout=None
+        if as_mode.startswith("Select"):
+            layout=reinforcement_editor("analysis",b,h,cover,REBAR[stirrup][0],agg,bending)
+            layout_summary(layout)
+        else:
+            x1,x2=st.columns(2)
+            with x1: as_t=st.number_input("Total tensile steel As (in²)",.1,45.0,3.0,step=.1,key="analysis_as")
+            with x2: d=st.number_input("Steel centroid depth d from compression face (in)",1.0,h-.1,min(21.5,h-.2),step=.25,key="analysis_d")
+            st.info("This option does not validate rebar spacing or determine extreme-layer steel strain; enter discrete bars for two-layer analysis.")
+        doubly=st.checkbox("Include reinforcement on compression side",value=False,key="analysis_doubly")
+        as_c,dp,comp_valid=0.0,2.375,True
         if doubly:
-            st.markdown("**Upper reinforcement**")
-            cc1, cc2, cc3 = st.columns(3)
-            with cc1:
-                cn = st.slider("Upper bar count", 2, 6, 2)
-            with cc2:
-                csize = st.selectbox("Upper bar size", list(REBAR)[1:], index=3)
-            with cc3:
-                dp = st.number_input(
-                    "Upper steel centroid d' (in)", .5, max(.6, d - .01), min(2.375, d - .1), step=.125
-                )
-            as_c = cn * REBAR[csize][1]
-
+            as_c,dp,comp_valid=compression_steel_editor("analysis",b,cover,REBAR[stirrup][0],agg,bending)
     with st.container(border=True):
-        st.markdown("### 2 · Set the applied moment")
-        mu = st.number_input(
-            "Optional factored moment demand Mu (kip-ft)", 0.0, 3000.0, 200.0, step=10.0
-        )
-        st.caption("Set Mu = 0 to explore capacity without checking a particular demand.")
-
+        st.markdown("### 2 · Factored moment demand")
+        mu=st.number_input("Optional |Mu| (kip-ft)",0.0,3000.0,200.0,step=10.0,key="analysis_mu")
     try:
-        s = Section(b=b, h=h, d=d, as_t=as_t, kind=section_kind, bf=bf, hf=hf, as_c=as_c, dp=dp)
-        r = analyze(s, m)
+        s=section_from_layout(b,h,layout,kind,bf,hf,as_c,dp) if layout else Section(
+            b=b,h=h,d=d,as_t=as_t,kind=kind,bf=bf,hf=hf,as_c=as_c,dp=dp,bending=bending)
+        r=analyze(s,m)
         with st.container(border=True):
-            st.markdown("### 3 · Strength and strain results")
-            section_metrics(s, r, mu if mu > 0 else None)
-            if as_mode == "Bar selection":
-                clear = clear_bar_spacing(b, n, REBAR[bar_size][0], cover, REBAR[stirrup_db][0])
-                req = required_horizontal_clear_spacing(REBAR[bar_size][0], .75)
-                if clear < req:
-                    st.warning(
-                        f"Bar-fit alert: one-layer clear spacing {clear:.2f} in is less "
-                        f"than the approximate minimum {req:.2f} in (assumes 3/4-in aggregate)."
-                    )
+            st.markdown("### 3 · Strength, strain, and detailing checks")
+            section_metrics(s,r,mu if mu>0 else None,layout_valid=(layout.valid if layout else True) and comp_valid)
         with st.container(border=True):
             st.markdown("### 4 · Visual interpretation")
-            show_diagrams(s, r)
+            show_diagrams(s,r,layout=layout)
             detail_panel(r)
     except ValueError as ex:
         st.error(f"Check your inputs: {ex}")
 
 
 def beam_design() -> None:
-    page_header(
-        "Beam design · Known dimensions",
-        "Find one-layer tension reinforcement layouts for a specified rectangular beam and moment demand.",
-    )
+    page_header("Beam design · Known dimensions", "Evaluate mixed-size, one- or two-layer reinforcement and compare with single-layer design alternatives.")
     with st.container(border=True):
         st.markdown("### 1 · Design inputs")
-        c1, c2, c3 = st.columns(3, gap="large")
+        bending=bending_selector("design_bending")
+        c1,c2,c3=st.columns(3,gap="large")
         with c1:
-            b = st.number_input("Beam width b (in)", 8.0, 40.0, 12.0, step=1.0, key="design_b")
-            h = st.number_input("Beam height h (in)", 12.0, 60.0, 24.0, step=1.0, key="design_h")
+            b=st.number_input("Beam width b (in)",8.0,40.0,12.0,step=1.0,key="design_b")
+            h=st.number_input("Beam height h (in)",12.0,60.0,24.0,step=1.0,key="design_h")
         with c2:
-            mu = st.number_input("Factored moment Mu (kip-ft)", 10.0, 2500.0, 220.0, step=10.0, key="design_mu")
-            cover = st.number_input("Clear cover to stirrup (in)", .75, 4.0, 1.5, step=.25, key="design_cover")
+            mu=st.number_input("Factored |Mu| (kip-ft)",10.0,2500.0,220.0,step=10.0,key="design_mu")
+            cover=st.number_input("Clear cover to outer stirrup (in)",.75,4.0,1.5,step=.25,key="design_cover")
         with c3:
-            agg = st.number_input("Nominal max aggregate size (in)", .375, 1.5, .75, step=.125, key="design_agg")
-            stirrup = st.selectbox("Stirrup bar size", ["#3", "#4"], key="design_stirrup")
-
-        mode = st.radio(
-            "Reinforcement model", ["Singly reinforced", "Doubly reinforced (fixed upper steel)"], horizontal=True
-        )
-        as_c, dp = 0.0, 2.375
-        if mode.startswith("Doubly"):
-            st.markdown("**Fixed upper reinforcement**")
-            x1, x2, x3 = st.columns(3)
-            with x1:
-                nc = st.slider("Upper bars", 2, 6, 2, key="design_cn")
-            with x2:
-                cs = st.selectbox("Upper bar size", list(REBAR)[1:], index=4, key="design_cs")
-            with x3:
-                dp = st.number_input("Upper centroid d' (in)", .5, h - 3.0, 2.375, step=.125, key="design_dp")
-            as_c = nc * REBAR[cs][1]
-            st.caption(f"Fixed upper steel A's = {as_c:.2f} in². Only the tension reinforcement is varied.")
-
-    try:
-        options = candidates_for_section(mu, b, h, m, cover, REBAR[stirrup][0], agg, as_c, dp)
+            agg=st.number_input("Max aggregate size (in)",.375,1.5,.75,step=.125,key="design_agg")
+            stirrup=st.selectbox("Stirrup bar size",["#3","#4"],key="design_stirrup")
+        doubly=st.checkbox("Include compression-side steel",value=False,key="design_doubly")
+        as_c,dp,comp_valid=0.0,2.375,True
+        if doubly:
+            as_c,dp,comp_valid=compression_steel_editor("design",b,cover,REBAR[stirrup][0],agg,bending)
+    tab_manual,tab_options=st.tabs(["Manual layout · mixed bars / 1–2 layers","Single-layer design suggestions"])
+    with tab_manual:
         with st.container(border=True):
-            st.markdown("### 2 · Reinforcement alternatives")
-            st.metric("Acceptable one-layer candidates", len(options))
-            if options:
-                rows = [
-                    {
-                        "Option": c.label,
-                        "As (in²)": round(c.as_t, 2),
-                        "d (in)": round(c.d, 2),
-                        "Clear spacing (in)": round(c.clear, 2),
-                        "εt": round(c.result.strain_t, 5),
-                        "φMn (kip-ft)": round(c.result.phi_mn_kft, 1),
-                    }
-                    for c in options[:12]
-                ]
-                st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
-                st.download_button(
-                    "Export table (CSV)",
-                    data=pd.DataFrame(rows).to_csv(index=False).encode(),
-                    file_name="beam_flexure_candidates.csv",
-                    mime="text/csv",
-                    icon=":material/download:",
-                )
-                selected = st.selectbox(
-                    "Inspect an alternative",
-                    range(min(12, len(options))),
-                    format_func=lambda i: f"{options[i].label} · φMn {options[i].result.phi_mn_kft:.1f} kip-ft",
-                )
-            else:
-                selected = None
-                st.warning(
-                    "No acceptable one-layer combination was found within 2–12 bars, "
-                    "#4–#11. Increase dimensions, revise demand, or detail a multilayer arrangement manually."
-                )
-        if selected is not None:
-            c = options[selected]
-            sec = Section(b=b, h=h, d=c.d, as_t=c.as_t, as_c=as_c, dp=dp)
-            with st.container(border=True):
-                st.markdown("### 3 · Check the selected alternative")
-                section_metrics(sec, c.result, mu)
-                st.plotly_chart(section_figure(sec, c.result), use_container_width=True)
-                st.caption(
-                    f"Clear spacing = {c.clear:.2f} in; minimum checked = "
-                    f"{required_horizontal_clear_spacing(REBAR[c.designation][0], agg):.2f} in. "
-                    "Service-load crack control, anchorage, shear, deflection, and other checks remain outstanding."
-                )
-                detail_panel(c.result)
-    except ValueError as ex:
-        st.error(f"Check your inputs: {ex}")
+            st.markdown("### 2 · Build and check reinforcement")
+            layout=reinforcement_editor("design",b,h,cover,REBAR[stirrup][0],agg,bending)
+            layout_summary(layout)
+            try:
+                s=section_from_layout(b,h,layout,as_c=as_c,dp=dp)
+                r=analyze(s,m)
+                section_metrics(s,r,mu,layout_valid=layout.valid and comp_valid)
+                st.plotly_chart(section_figure(s,r,layout=layout),use_container_width=True)
+                detail_panel(r)
+            except ValueError as ex:
+                st.error(f"Check your reinforcement inputs: {ex}")
+    with tab_options:
+        with st.container(border=True):
+            st.markdown("### 2 · Automatic single-layer suggestions")
+            st.caption("Suggestions use one size per row. Use the Manual layout tab for mixed sizes and two-layer detailing.")
+            try:
+                options=candidates_for_section(mu,b,h,m,cover,REBAR[stirrup][0],agg,as_c,dp,bending=bending)
+                st.metric("Candidates satisfying limited checks",len(options))
+                if options:
+                    rows=[{"Option":c.label,"As (in²)":round(c.as_t,2),"d (in)":round(c.d,2),
+                           "Clear spacing (in)":round(c.clear,2),"εt":round(c.result.strain_t,5),
+                           "φMn (kip-ft)":round(c.result.phi_mn_kft,1)} for c in options[:12]]
+                    st.dataframe(pd.DataFrame(rows),hide_index=True,use_container_width=True)
+                    st.download_button("Export table (CSV)",data=pd.DataFrame(rows).to_csv(index=False).encode(),
+                                       file_name="beam_flexure_candidates.csv",mime="text/csv",icon=":material/download:")
+                    selected=st.selectbox("Inspect alternative",range(min(12,len(options))),
+                                          format_func=lambda i:f"{options[i].label} · φMn {options[i].result.phi_mn_kft:.1f} kip-ft",
+                                          key="design_selected")
+                    c=options[selected]
+                    sec=Section(b=b,h=h,d=c.d,as_t=c.as_t,as_c=as_c,dp=dp,bending=bending)
+                    section_metrics(sec,c.result,mu,layout_valid=comp_valid)
+                    st.plotly_chart(section_figure(sec,c.result),use_container_width=True)
+                    detail_panel(c.result)
+                else:
+                    st.warning("No one-layer candidate found in the current limited search. Try a mixed-size or two-layer arrangement in the Manual layout tab.")
+            except ValueError as ex:
+                st.error(f"Check your design inputs: {ex}")
 
 
 def preliminary_sizing() -> None:
     page_header(
         "Preliminary member sizing",
-        "Estimate rectangular beam dimensions using a target tensile strain, then verify the selected layout.",
+        "Estimate rectangular beam dimensions for positive or negative moment, then verify a trial layout.",
     )
     with st.container(border=True):
         st.markdown("### 1 · Choose design assumptions")
+        bending=bending_selector("pre_bending")
         c1, c2, c3 = st.columns(3, gap="large")
         with c1:
             mu = st.number_input("Factored design moment Mu (kip-ft)", 10.0, 2500.0, 250.0, step=10.0, key="pre_mu")
@@ -379,7 +414,7 @@ def preliminary_sizing() -> None:
             agg = st.number_input("Aggregate size (in)", .375, 1.5, .75, step=.125, key="pre_agg")
 
     try:
-        p = preliminary_size(mu, m, alpha, eps, cover, REBAR[stirrup][0], agg)
+        p = preliminary_size(mu, m, alpha, eps, cover, REBAR[stirrup][0], agg, bending=bending)
         with st.container(border=True):
             st.markdown("### 2 · Initial section estimates")
             a, b, c = st.columns(3)
@@ -396,7 +431,7 @@ def preliminary_sizing() -> None:
                     f"Trial section: **b = {p.b_selected:g} in, "
                     f"h = {p.h_selected:g} in**, with **{p.candidate.label}** (one layer)."
                 )
-                s = Section(b=p.b_selected, h=p.h_selected, d=p.candidate.d, as_t=p.candidate.as_t)
+                s = Section(b=p.b_selected, h=p.h_selected, d=p.candidate.d, as_t=p.candidate.as_t, bending=bending)
                 section_metrics(s, p.candidate.result, mu)
                 st.plotly_chart(section_figure(s, p.candidate.result), use_container_width=True)
                 detail_panel(p.candidate.result)
@@ -407,7 +442,7 @@ def preliminary_sizing() -> None:
                 )
             st.caption(
                 "The default target εt = 0.0075 is a preliminary ductility heuristic. "
-                "This procedure does not verify deflection, shear, loading, or complete detailing requirements."
+                "This procedure suggests single-layer bars only and does not verify deflection, shear, loading, or complete detailing requirements."
             )
     except ValueError as ex:
         st.error(f"Check your inputs: {ex}")
@@ -474,7 +509,8 @@ def scope_roadmap() -> None:
             "- **§9.6.1.2:** minimum longitudinal beam reinforcement (§9.6.1.3 exception not assessed).\n"
             "- **Table 21.2.2:** strain-dependent strength-reduction factors for nonprestressed tied sections.\n"
             "- **§22.2.2 and Table 22.2.2.4.3:** strain compatibility and equivalent rectangular concrete stress block.\n"
-            "- **§25.2.1:** selected one-layer horizontal clear spacing checks.\n"
+            "- **§25.2.1:** selected horizontal clear-spacing checks for mixed bar sizes.\n"
+            "- **§25.2.2:** vertical layer alignment and clear spacing (using additional conservative db-based limit).\n"
             "- **§6.3.2:** effective flange width is a user-provided, preverified input—not automatically determined."
         )
     with st.container(border=True):
@@ -483,7 +519,8 @@ def scope_roadmap() -> None:
             "The current application does **not** establish load combinations or member demand, "
             "or complete checks for shear, torsion, development/anchorage, crack-control spacing "
             "under service loads, deflection, seismic detailing, fire, exposure-related cover, "
-            "multilayer reinforcement, slabs, negative-moment T-sections, or column interaction."
+            "slabs, negative-moment flanged sections, or column interaction. "
+            "Mixed-size and two-layer detailing is limited to selected spacing, width and alignment checks."
         )
         st.warning("Do not use this instructional prototype to approve or certify a real structural design.")
     with st.container(border=True):
@@ -531,6 +568,7 @@ with st.sidebar:
 selected_page.run()
 st.divider()
 st.caption(
-    "Concrete Design Explorer · ACI 318-19 reference edition · Developed by Dr. Wu @ UT Chattanooga · "
-    "Verify all engineering results independently before practical application."
+    "Concrete Design Explorer · ACI 318-19 reference edition · "
+    "Verify all engineering results independently before practical application. "
+    "Developed by Dr. Wu @ UT Chattanooga."
 )
