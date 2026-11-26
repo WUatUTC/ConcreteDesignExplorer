@@ -23,7 +23,8 @@ class Candidate:
 def candidates_for_section(mu_kft: float, b: float, h: float, mat: Materials,
                            cover: float, stirrup_db: float, aggregate: float = 0.75,
                            as_c: float = 0.0, dp: float = 2.375,
-                           min_n: int = 2, max_n: int = 12):
+                           min_n: int = 2, max_n: int = 12,
+                           bending: str = "Positive"):
     """Return acceptable one-layer bar combinations sorted by installed As.
 
     Limited to rectangular beams; both strength and tension-control are mandatory.
@@ -41,7 +42,7 @@ def candidates_for_section(mu_kft: float, b: float, h: float, mat: Materials,
             clear = clear_bar_spacing(b, n, db, cover, stirrup_db)
             if clear < required_horizontal_clear_spacing(db, aggregate):
                 continue
-            s = Section(b=b, h=h, d=d, as_t=n*area, as_c=as_c, dp=dp)
+            s = Section(b=b, h=h, d=d, as_t=n*area, as_c=as_c, dp=dp, bending=bending)
             result = analyze(s, mat)
             if as_c and result.strain_c_steel <= 0:
                 continue  # specified upper steel must actually be in compression
@@ -65,7 +66,8 @@ class Preliminary:
 
 def preliminary_size(mu_kft: float, mat: Materials, alpha: float = 0.6,
                      strain_target: float = 0.0075, cover: float = 1.5,
-                     stirrup_db: float = 0.375, aggregate: float = 0.75):
+                     stirrup_db: float = 0.375, aggregate: float = 0.75,
+                     bending: str = "Positive"):
     """Wight-style initial tension-controlled sizing from a chosen strain target.
     b ≈ alpha*d, d is solved using Mu ≈ phi*R*b*d^2. Then discrete detailing.
     """
@@ -87,7 +89,7 @@ def preliminary_size(mu_kft: float, mat: Materials, alpha: float = 0.6,
         b_try = b_start
         h_try = h_start + iteration
         good = candidates_for_section(mu_kft, b_try, h_try, mat,
-                                      cover, stirrup_db, aggregate)
+                                      cover, stirrup_db, aggregate, bending=bending)
         if good:
             # Favor conventional 3–5-bar, moderate-size layouts where available;
             # the absolutely smallest As may select two very large bars.
