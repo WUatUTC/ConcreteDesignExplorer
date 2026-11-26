@@ -19,19 +19,19 @@ This guide uses **Prediction → Exploration → Explanation → Verification**.
 **Aligns with:** Ch4L5; later Ch5L5.
 
 1. In **Flexural analysis**, start with a singly reinforced beam and note εt, c, Mn and φ.
-2. Toggle **Include upper reinforcement** with the same bottom steel and geometry.
-3. Compare the upper steel strain/stress, compression force, neutral axis, and strength. Discuss why upper bars may not yield.
+2. Toggle **Include reinforcement on compression side** with the same tension steel and geometry.
+3. Compare compression-side steel strain/stress, compression force, neutral axis, and strength. Discuss why the compression-side bars may not yield.
 4. Examine force equilibrium when the steel's occupied area displaces part of the idealized Whitney stress block. Ask which assumptions require checking.
 5. Sketch how adding compression reinforcement could change ductility and long-term serviceability; emphasize that this app does **not** calculate deflection.
 
-**Instructor note:** The fixed-upper-steel design search is illustrative. Full compression-reinforcement optimization and upper-bar constructability will be part of a later release.
+**Instructor note:** The fixed compression-side design search is illustrative. Full compression-reinforcement optimization and complete detailing will be part of a later release.
 
 ## Activity C · Design with known dimensions (20–25 min)
 
 **Aligns with:** Ch5L2, Ch5L3 and your design flowchart.
 
 1. Supply b, h, Mu, fc, fy, cover, and stirrup size; ask students to estimate effective depth and As from a simplified lever arm before opening the app.
-2. Use **Beam design: dimensions known** to display acceptable one-layer choices.
+2. Use **Beam design: dimensions known** to display acceptable one-layer choices, then switch to manual design for mixed bar sizes or two layers.
 3. Compare 2–3 choices: steel area, actual d (depends on bar diameter), clear bar spacing and φMn.
 4. Require each team to select an arrangement and explain tradeoffs in material use, construction, and available safety margin.
 5. Verify their chosen design by hand; list additional ACI checks that prevent calling the output a completed member design.
@@ -45,6 +45,14 @@ This guide uses **Prediction → Exploration → Explanation → Verification**.
 3. Run **Preliminary member sizing**; students compare their predictions with the nominal sizes and bars returned by the program.
 4. Change the strain target and b/d ratio and explain why different proportions lead to different reinforcement demands.
 5. Compare two designs by strength, ductility, and constructability; identify unmodeled shear and deflection limitations.
+
+## Activity E · Two-layer mixed reinforcement and negative moment (20 min)
+
+1. Give students a rectangular section and ask them to place three #8 and one #6 tension bars in Layer 1 and two #7 in Layer 2. Predict the resulting depth to the reinforcement centroid.
+2. Set the bending direction to **Positive**. Compare the actual extreme tension bar depth with the area-weighted centroid depth, and explain which is used for the tensile strain controlling φ.
+3. Flip to **Negative** and explain why top reinforcement now carries tension while the concrete compression face moves to the bottom. For a symmetric rectangular beam, the computed nominal strength should remain equal if the bar arrangement is mirrored.
+4. Decrease the layer clear spacing below max(1 in, maximum nominal db) and examine the detailing alert. Discuss the difference between the app's conservative spacing criterion and ACI 318-19 §25.2.2 minimum 1-inch vertical spacing and bar alignment requirements.
+5. Verify the reinforcement centroid by hand: ȳ = Σ(As,i yi) / ΣAs,i, and independently check the strain-compatible strength results.
 
 ## Where AI fits later
 
