@@ -531,6 +531,6 @@ with st.sidebar:
 selected_page.run()
 st.divider()
 st.caption(
-    "Concrete Design Explorer · ACI 318-19 reference edition · Developed by Dr. Wu @ UT Chattanooga "
+    "Concrete Design Explorer · ACI 318-19 reference edition · Developed by Dr. Wu @ UT Chattanooga · "
     "Verify all engineering results independently before practical application."
 )
